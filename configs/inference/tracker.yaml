@@ -1,0 +1,12 @@
+# ByteTrack tracker configuration
+tracker_type: bytetrack
+track_high_thresh: 0.15
+track_low_thresh: 0.05
+new_track_thresh: 0.2
+track_buffer: 60              # frames to keep lost tracks (2s at 30fps)
+match_thresh: 0.8
+
+# Multi-frame confirmation
+multiframe:
+  min_hits: 3                 # minimum detections to confirm track
+  window: 5                   # sliding window size (frames)

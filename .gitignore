@@ -1,0 +1,15 @@
+data/
+runs/
+*.pt
+*.pth
+*.onnx
+*.engine
+__pycache__/
+*.pyc
+.conda/
+*.egg-info/
+dist/
+build/
+.venv/
+.env
+wandb/

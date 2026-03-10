@@ -1,0 +1,10 @@
+# SAHI tiled inference configuration
+slice_height: 640
+slice_width: 640
+overlap_height_ratio: 0.25
+overlap_width_ratio: 0.25
+confidence_threshold: 0.15
+perform_standard_pred: true      # also run full-image detection for large targets
+postprocess_type: NMS
+postprocess_match_metric: IOS
+postprocess_match_threshold: 0.5

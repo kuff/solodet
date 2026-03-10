@@ -1,0 +1,16 @@
+# Scale bin definitions for per-scale evaluation
+# Bins are defined by max(width, height) in pixels
+
+bins:
+  tiny:
+    min: 0
+    max: 30
+  small:
+    min: 30
+    max: 50
+  medium:
+    min: 50
+    max: 100
+  large:
+    min: 100
+    max: 100000   # effectively unbounded

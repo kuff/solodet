@@ -1,0 +1,30 @@
+# Phase 2: Tiny-target focused training config
+# Fine-tune from Phase 1 with higher resolution and more augmentation
+
+imgsz: 1920
+batch: 4
+epochs: 100
+optimizer: AdamW
+lr0: 0.0005
+lrf: 0.01
+warmup_epochs: 3
+cos_lr: true
+
+# Augmentation - more aggressive for tiny targets
+copy_paste: 0.3
+scale: 0.9
+mosaic: 1.0
+close_mosaic: 10
+fliplr: 0.5
+flipud: 0.0
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+degrees: 0.0
+translate: 0.2
+mixup: 0.1
+
+# Other
+patience: 20
+save_period: 10
+workers: 8

@@ -1,0 +1,52 @@
+# YOLOv8m with P2 head + CBAM attention in neck
+# Single class: drone
+# Scale: m [0.67, 0.75, 768]
+# Requires: solodet.model.register.register_custom_modules() before loading
+
+nc: 1
+scales:
+  m: [0.67, 0.75, 768]
+
+# YOLOv8 backbone
+backbone:
+  # [from, repeats, module, args]
+  - [-1, 1, Conv, [64, 3, 2]]       # 0-P1/2
+  - [-1, 1, Conv, [128, 3, 2]]      # 1-P2/4
+  - [-1, 3, C2f, [128, True]]       # 2
+  - [-1, 1, Conv, [256, 3, 2]]      # 3-P3/8
+  - [-1, 6, C2f, [256, True]]       # 4
+  - [-1, 1, Conv, [512, 3, 2]]      # 5-P4/16
+  - [-1, 6, C2f, [512, True]]       # 6
+  - [-1, 1, Conv, [1024, 3, 2]]     # 7-P5/32
+  - [-1, 3, C2f, [1024, True]]      # 8
+  - [-1, 1, SPPF, [1024, 5]]        # 9
+
+# YOLOv8 head with P2 + CBAM attention after feature fusion
+head:
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]  # 10
+  - [[-1, 6], 1, Concat, [1]]                     # 11 cat P4
+  - [-1, 3, C2f, [512]]                           # 12
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]   # 13
+  - [[-1, 4], 1, Concat, [1]]                     # 14 cat P3
+  - [-1, 3, C2f, [256]]                           # 15
+  - [-1, 1, CBAM, [256]]                          # 16 CBAM on P3
+
+  - [-1, 1, nn.Upsample, [None, 2, "nearest"]]   # 17
+  - [[-1, 2], 1, Concat, [1]]                     # 18 cat P2
+  - [-1, 3, C2f, [128]]                           # 19
+  - [-1, 1, CBAM, [128]]                          # 20 CBAM on P2
+
+  - [-1, 1, Conv, [128, 3, 2]]                    # 21
+  - [[-1, 16], 1, Concat, [1]]                    # 22 cat P3
+  - [-1, 3, C2f, [256]]                           # 23
+
+  - [-1, 1, Conv, [256, 3, 2]]                    # 24
+  - [[-1, 12], 1, Concat, [1]]                    # 25 cat P4
+  - [-1, 3, C2f, [512]]                           # 26
+
+  - [-1, 1, Conv, [512, 3, 2]]                    # 27
+  - [[-1, 9], 1, Concat, [1]]                     # 28 cat P5
+  - [-1, 3, C2f, [1024]]                          # 29
+
+  - [[20, 23, 26, 29], 1, Detect, [nc]]           # Detect P2, P3, P4, P5
