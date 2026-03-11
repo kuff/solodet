@@ -2,8 +2,9 @@
 # YOLOv8m-P2 on merged dataset at 1280px
 
 imgsz: 1280
-batch: 8
-epochs: 150
+batch: 2
+epochs: 50
+fraction: 0.1
 optimizer: AdamW
 lr0: 0.001
 lrf: 0.01
@@ -26,5 +27,5 @@ mixup: 0.0
 
 # Other
 patience: 30
-save_period: 10
-workers: 8
+save_period: 5
+workers: 4

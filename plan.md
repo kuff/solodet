@@ -242,3 +242,191 @@ All adapters convert to YOLO format: one `.txt` per image, `class_id x_center y_
 3. **Inference smoke test**: Run `scripts/infer.py` on a test video with SAHI+tracking, verify annotated output video shows detections with track IDs
 4. **Evaluation**: Run `scripts/evaluate.py` with scale bins, verify per-bin mAP is computed and printed in a table
 5. **Multi-scale correctness**: Manually inspect predictions on frames containing both tiny and large drones to confirm both are detected
+6. **Real-time benchmark**: Export to TensorRT FP16, run `scripts/benchmark.py` on test video, verify >=25 FPS sustained with tracking + multi-frame confirmation enabled
+
+---
+
+## Addendum: Real-Time Inference Requirement
+
+### New Requirement
+
+The system must be capable of **real-time inference (>=25 FPS)** on an RTX 2070 (8GB) while maintaining multi-scale drone detection across the tiny (<30px), medium (30-100px), and large (>100px) regimes. This addendum revises the inference pipeline design to meet this constraint. Training, data, and evaluation pipelines are unaffected.
+
+### Original Design (Offline-First)
+
+The original inference pipeline centred on **SAHI tiled inference** as the primary detection strategy:
+
+```
+Frame -> SAHI tiling (640x640, 25% overlap) -> YOLOv8m-P2 on each tile + full image
+      -> NMS merge -> ByteTrack -> Multi-frame confirmation -> Output
+```
+
+- **5-9 forward passes per frame** (4-8 tiles + 1 full-image pass at 1280)
+- Each tile pass: ~15ms, full-image pass: ~60ms
+- **Total: ~120-200ms/frame -> 5-8 FPS on RTX 2070**
+- Maximises small-object recall — SAHI preserves full resolution for every region of the image
+- No consideration of inference latency as a constraint
+
+This design treated SAHI as mandatory (described in research.md as "the single biggest win for tiny targets with minimal effort"). The implicit assumption was that accuracy on the tiniest targets outweighed throughput.
+
+### Revised Design (Dual-Mode: Real-Time + Offline)
+
+The key insight is that the **P2 detection head already provides much of what SAHI offers**, but architecturally rather than at inference time:
+
+| Property | SAHI (640 tiles through P3) | P2 head at 1280 (single pass) |
+|----------|---------------------------|-------------------------------|
+| Effective feature resolution for small objects | 80x80 per tile | 320x320 global |
+| Number of anchor positions covering a 20px drone | ~4-6 (within one tile) | ~25 (P2 feature map) |
+| Forward passes per frame | 5-9 | **1** |
+| Handles objects at tile boundaries | Via overlap + NMS merge | Natively (no tiling) |
+| Latency | ~120-200ms | **~40-80ms (PyTorch), ~20-35ms (TensorRT FP16)** |
+
+SAHI's advantage over single-pass P2 is strongest in the **extreme tiny regime (5-20px)**, where even the P2 feature map cell gets very little signal. For the 20px+ regime, P2 at 1280 is comparable or better (no tile-boundary artefacts, global context preserved).
+
+#### Real-time mode
+
+```
+Frame -> YOLOv8m-P2 single pass at 1280 (TensorRT FP16)
+      -> ByteTrack (low thresholds) -> Multi-frame confirmation -> Output
+```
+
+- **1 forward pass per frame**, ~20-35ms on RTX 2070 with TensorRT FP16
+- ByteTrack + multi-frame confirmation compensate for lower single-frame confidence on tiny targets
+- Target: **25-35 FPS sustained**
+
+#### Offline mode (unchanged from original plan)
+
+```
+Frame -> SAHI tiling + full-image pass -> NMS merge
+      -> ByteTrack -> Multi-frame confirmation -> Output
+```
+
+- Maximum accuracy, ~5-8 FPS
+- Used for batch processing, evaluation, and as an accuracy ceiling benchmark
+
+### Arguments For This Decision
+
+1. **P2 head is architecturally equivalent to SAHI for most target sizes.** The P2 head at stride 4 with 1280 input produces 320x320 feature maps. SAHI with 640x640 tiles through a standard P3 head (stride 8) produces 80x80 per tile — with 4-8 tiles, the total anchor coverage is similar, but P2 achieves it in a single pass without tile-boundary artefacts or NMS merging.
+
+2. **Temporal methods compensate for the accuracy gap on the tiniest targets.** Research.md documents that multi-frame motion analysis "dramatically reduces false negatives for dot-like targets at range." ByteTrack's two-pass association (high-confidence first, then low-confidence) rescues weak single-frame detections by associating them with existing tracks. A drone that produces a 0.10-confidence detection on individual frames can be reliably tracked across frames and confirmed by the multi-frame confirmer. This temporal pipeline costs <1ms per frame — effectively free.
+
+3. **SAHI remains available as a plug-and-play upgrade.** Dropping SAHI from the real-time path doesn't remove it from the system. The offline mode preserves the original pipeline for batch evaluation, post-hoc analysis, or deployment scenarios where latency is not a constraint. This means we sacrifice nothing — we gain a real-time mode alongside the existing offline mode.
+
+4. **TensorRT FP16 is a near-free 2x speedup.** Ultralytics natively supports `model.export(format='engine', half=True)`. FP16 quantisation has negligible accuracy impact on detection tasks and roughly halves inference latency. This is standard practice for deployment.
+
+5. **A speed variant (YOLOv8s-P2) provides a further fallback.** If YOLOv8m-P2 at TensorRT FP16 does not sustain 25 FPS on the target hardware, YOLOv8s-P2 (~2.5x fewer FLOPs) should reach 40-50 FPS. This can be trained with the same pipeline and configs, only changing the model YAML.
+
+### What Is Lost
+
+The **5-20px extreme-tiny regime** takes the biggest accuracy hit in real-time mode. A 10px drone at 1280 input occupies ~0.006% of the image area. The P2 feature map cell covering it receives minimal signal — SAHI would zoom into that region via a 640x640 tile, making the drone ~1.6% of the tile and much more detectable. Multi-frame confirmation partially compensates (by accumulating weak evidence over time), but some very faint, slow-moving long-range targets that SAHI would catch in a single frame may require several frames of tracking before confirmation.
+
+This is an acceptable tradeoff: the 5-20px regime is the hardest and rarest case, and the temporal pipeline provides a different (time-domain rather than spatial-domain) mechanism for recovering those detections.
+
+### Changes to Existing Plan Sections
+
+#### Project Structure (additions)
+
+```
+configs/
+│   ├── inference/
+│   │   ├── sahi.yaml              # SAHI config (offline mode)
+│   │   ├── tracker.yaml           # ByteTrack parameters (shared)
+│   │   ├── realtime.yaml          # real-time mode config (NEW)
+│   │   └── offline.yaml           # offline mode config (NEW)
+│   ...
+scripts/
+│   ├── export.py                  # TensorRT/ONNX export (NEW)
+│   ├── benchmark.py               # FPS benchmarking (NEW)
+│   ...
+```
+
+#### Step 2: Configuration files (additions)
+
+**`configs/inference/realtime.yaml`:**
+- `mode: realtime`
+- `imgsz: 1280`
+- `confidence_threshold: 0.15`
+- `use_sahi: false`
+- `engine: tensorrt` (FP16)
+- `multiframe_min_hits: 3`, `multiframe_window: 5`
+
+**`configs/inference/offline.yaml`:**
+- `mode: offline`
+- `imgsz: 1280`
+- `confidence_threshold: 0.15`
+- `use_sahi: true`
+- `sahi_slice_size: 640`, `sahi_overlap: 0.25`
+- `perform_standard_pred: true`
+- `multiframe_min_hits: 3`, `multiframe_window: 5`
+
+#### Step 5: Training pipeline (addition)
+
+**New step 5b — TensorRT export:**
+
+After training completes, export the best checkpoint for real-time deployment:
+
+```bash
+python scripts/export.py \
+    --weights runs/phase1_baseline/weights/best.pt \
+    --format engine --half --imgsz 1280
+```
+
+This produces a `.engine` file optimised for the target GPU. The export is hardware-specific (an engine built on RTX 2070 only runs on RTX 2070).
+
+**`scripts/export.py`:**
+1. Load trained weights via `YOLO(weights_path)`
+2. Call `model.export(format=format, half=half, imgsz=imgsz)`
+3. Print output path and run a single warmup inference to verify
+
+#### Step 6: Inference pipeline (revised)
+
+**`solodet/inference/detector.py`** — `DroneDetector` class:
+- `mode` parameter: `"realtime"` or `"offline"`
+- **Real-time mode**: Loads TensorRT `.engine` (or falls back to PyTorch), single-pass `model.predict()` at 1280
+- **Offline mode**: SAHI `AutoDetectionModel` + `get_sliced_prediction()` with full-image pass, as in original plan
+- Both modes output the same detection format (list of `[x1, y1, x2, y2, confidence, class_id]`)
+
+**`solodet/inference/tracker.py`** — unchanged. ByteTrack operates on detection arrays regardless of how they were produced.
+
+**`solodet/inference/multiframe.py`** — unchanged, but **elevated in importance**. In real-time mode, multi-frame confirmation is the primary mechanism for recovering weak tiny-target detections that SAHI would have caught spatially. The confirmer's role shifts from "nice-to-have temporal smoothing" to "critical accuracy recovery for the tiny regime."
+
+**`solodet/inference/video.py`** — `VideoPipeline`:
+- Accepts `mode` parameter to select real-time or offline detection
+- Per-frame loop structure is identical in both modes: detect -> track -> confirm -> yield
+- Real-time mode additionally tracks FPS and warns if sustained throughput drops below target
+
+**`scripts/infer.py`**: CLI adds `--mode {realtime,offline}` flag, defaulting to `realtime`.
+
+**`scripts/benchmark.py`** (new): Runs inference on a video without writing output, reports:
+- Mean/P50/P95 per-frame latency (ms)
+- Sustained FPS over the full video
+- GPU memory usage
+- Breakdown: detection time vs tracking time vs confirmation time
+
+#### Key Design Decisions (revision)
+
+Decision #2 is revised from:
+
+> **SAHI + full-image dual inference**: Tiles catch tiny targets; full-image pass catches large targets spanning multiple tiles. NMS merges results.
+
+To:
+
+> **Dual-mode inference — real-time (single-pass P2) and offline (SAHI + full-image)**: The P2 head at 1280 provides high-resolution feature maps (320x320) that cover most of the accuracy benefit of SAHI tiling, in a single forward pass. Real-time mode uses this with TensorRT FP16 for >=25 FPS. Offline mode retains SAHI for maximum accuracy when latency is unconstrained. The temporal pipeline (ByteTrack + multi-frame confirmation) bridges the accuracy gap in real-time mode for the tiniest targets.
+
+#### Verification (addition)
+
+Added as item 6 (above):
+
+> **Real-time benchmark**: Export to TensorRT FP16, run `scripts/benchmark.py` on test video, verify >=25 FPS sustained with tracking + multi-frame confirmation enabled.
+
+### Expected Performance Summary
+
+| Mode | Pipeline | Est. FPS (RTX 2070) | Tiny (5-20px) | Small (20-50px) | Medium+ (50px+) |
+|------|----------|---------------------|---------------|-----------------|------------------|
+| Real-time (m, TRT FP16) | P2 single-pass + ByteTrack | 25-35 | Reduced (temporal recovery) | Good | Excellent |
+| Real-time (s, TRT FP16) | P2 single-pass + ByteTrack | 40-50 | Reduced | Moderate | Good |
+| Offline (m, PyTorch) | SAHI + P2 + ByteTrack | 5-8 | Best | Best | Excellent |
+
+### Phase 2 Interaction
+
+The Phase 2 CBAM attention modules remain valuable and are arguably **more important** with the real-time constraint. In offline mode, SAHI spatially zooms into every region — attention is less critical. In real-time single-pass mode, the model must decide where to focus within one forward pass. Channel and spatial attention (CBAM) in the neck helps the P2 head allocate capacity to salient sky regions where tiny drones appear, partially compensating for the loss of SAHI's explicit spatial focus. CBAM adds negligible latency (~1-2ms).

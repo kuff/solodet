@@ -21,10 +21,12 @@ def register_custom_modules() -> None:
     modules.CBAM = CBAM
     modules.ECA = ECA
 
-    # Also register in the __all__ list if it exists
+    # Also register in the __all__ tuple/list if it exists
     if hasattr(modules, "__all__"):
+        all_names = list(modules.__all__)
         for name in ("CBAM", "ECA"):
-            if name not in modules.__all__:
-                modules.__all__.append(name)
+            if name not in all_names:
+                all_names.append(name)
+        modules.__all__ = tuple(all_names)
 
     _registered = True
