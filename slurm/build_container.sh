@@ -5,7 +5,7 @@
 #SBATCH --cpus-per-task=32
 #SBATCH --mem=60G
 #SBATCH --time=01:00:00
-#SBATCH --partition=batch
+#SBATCH --partition=prioritized
 
 set -euo pipefail
 
