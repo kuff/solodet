@@ -3,6 +3,8 @@
 ## Overview
 Ground-to-air RGB drone detection system for video sequences. Single-class (drone) detection using YOLOv8m with P2 small-object head, SAHI tiled inference, and ByteTrack temporal tracking.
 
+- **GitHub repo**: https://github.com/kuff/solodet
+
 ## Environment
 - **Conda env**: `solodet` (Python 3.11)
 - **Activate**: `conda activate solodet`

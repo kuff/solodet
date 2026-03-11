@@ -99,7 +99,29 @@ def main():
                         help="CUDA device(s) or 'cpu'")
     parser.add_argument("--resume", action="store_true",
                         help="Resume training from last checkpoint")
+    parser.add_argument("--overrides", nargs="*", default=[],
+                        help="Config overrides as key=value pairs (e.g. batch=16 workers=8)")
     args = parser.parse_args()
+
+    # Parse --overrides into a dict with auto-casting
+    overrides = {}
+    for item in args.overrides:
+        if "=" not in item:
+            print(f"Warning: skipping malformed override '{item}' (expected key=value)")
+            continue
+        key, val = item.split("=", 1)
+        # Auto-cast: bool, int, float, str
+        if val.lower() in ("true", "false"):
+            val = val.lower() == "true"
+        else:
+            for cast in (int, float):
+                try:
+                    val = cast(val)
+                    break
+                except ValueError:
+                    continue
+
+        overrides[key] = val
 
     # Register custom modules (needed for CBAM/ECA model YAMLs)
     register_custom_modules()
@@ -107,6 +129,8 @@ def main():
     # Resolve run directory for logging (match Ultralytics' nested structure)
     logger = setup_logging(args.project, args.name)
     logger.info(f"Arguments: {vars(args)}")
+    if overrides:
+        logger.info(f"Config overrides: {overrides}")
 
     # Start GPU monitoring thread
     stop_event = threading.Event()
@@ -116,6 +140,8 @@ def main():
     monitor.start()
 
     train_cfg = load_config(args.config)
+    if overrides:
+        train_cfg.update(overrides)
     logger.info(f"Training config: {train_cfg}")
 
     # Load model

@@ -1,0 +1,27 @@
+# Conda environment spec for cotainr container build on AI Cloud
+# Usage: cotainr build solodet.sif --base-image=docker://nvcr.io/nvidia/cuda:12.8.0-runtime-ubuntu22.04 --conda-env=environment.yml
+name: solodet
+channels:
+  - pytorch
+  - nvidia
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.11
+  - pytorch=2.6
+  - torchvision
+  - pytorch-cuda=12.8
+  - numpy
+  - pandas
+  - pyyaml
+  - tqdm
+  - pip
+  - pip:
+    - ultralytics>=8.3
+    - sahi>=0.11
+    - opencv-python-headless>=4.8
+    - supervision>=0.19
+    - pycocotools
+    - gdown
+    - huggingface_hub
+    - lapx
